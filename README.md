@@ -4,7 +4,7 @@
 
 This repository contains the Python implementations and numerical experiments associated with the paper
 
-> **Toward a Unified Framework for Randomized Row-Action Methods for Structured Data Fitting and Constraint Geometry**  
+> **A Unified Framework for Randomized Row-Action Methods for Structured Data Fitting and Constraint Geometry**  
 > Valentin Leplat, Zeyu Dong, and Junfeng Yin.
 
 The project studies randomized row-action methods for problems with linear observations, convex constraints, and non-Euclidean geometry. It implements the two algorithmic branches developed in the paper:
@@ -547,14 +547,19 @@ This repository is a clean implementation extracted from three research notebook
 
 ---
 
-## License and credits
+## 📄 License
 
-The code is released under the MIT License.
+This project is licensed under the **MIT License** (see `LICENSE`).
 
-Authors and development:
+**Key points (MIT):**
 
-- Valentin Leplat
-- Zeyu Dong
-- Junfeng Yin
+- ✅ **Use**: you can use this software for any purpose
+- ✅ **Modify & distribute**: you can modify, distribute, and sublicense it
+- ✅ **Commercial use**: permitted
+- ✅ **Attribution**: include the copyright and license notice in copies
+- ✅ **No warranty**: the software is provided "as is"
 
-The repository was prepared from the numerical notebooks developed for the accompanying paper. Questions about the mathematics should be resolved against the manuscript before changing an algorithmic formula.
+## 📧 Support and Contact
+
+For questions, bug reports, or contributions, please contact:
+**valentin dot leplat [at] gmail dot com**
