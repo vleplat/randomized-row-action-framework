@@ -1,4 +1,4 @@
-.PHONY: install install-dev test lint check quick figures-nnls figures-entropy figures-moffett clean
+.PHONY: install install-dev test lint check quick figures-nnls figures-entropy figures-moffett benchmark-moffett clean
 
 install:
 	python -m pip install -e .
@@ -27,5 +27,13 @@ figures-entropy:
 figures-moffett:
 	python -m experiments.simplex_nmf --mode moffett --profile paper --data data/Moffet.mat
 
+benchmark-moffett:
+	python -m experiments.simplex_nmf_benchmark \
+		--seed 123 \
+		--n-outer 200 \
+		--data data/Moffet.mat \
+		--output-dir results/04_simplex_nmf_comparison \
+		--figure-dir figures/simplex_nmf_comparison
+
 clean:
-	rm -rf .pytest_cache .ruff_cache build dist *.egg-info src/*.egg-info results figures/nnls_noisy figures/entropy_selector figures_moffett
+	rm -rf .pytest_cache .ruff_cache build dist *.egg-info src/*.egg-info results figures/nnls_noisy figures/entropy_selector figures/simplex_nmf_comparison figures_moffett

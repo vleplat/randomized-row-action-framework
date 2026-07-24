@@ -1,5 +1,8 @@
 -r requirements.txt
 pytest>=7.4
 ruff>=0.5
+comm>=0.2
 jupyterlab>=4.0
 ipykernel>=6.25
+nbclient>=0.8
+nbformat>=5.9

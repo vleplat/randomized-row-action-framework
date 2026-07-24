@@ -27,8 +27,11 @@ dev = [
   "ruff>=0.5",
 ]
 notebooks = [
+  "comm>=0.2",
   "jupyterlab>=4.0",
   "ipykernel>=6.25",
+  "nbclient>=0.8",
+  "nbformat>=5.9",
 ]
 
 [tool.setuptools]

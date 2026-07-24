@@ -29,6 +29,10 @@ Thumbs.db
 
 # Local data and generated results
 CURSOR_PROMPT.md
+experiments/ablation_simplex_nmf_minibatch8.py
+experiments/benchmark_simplex_nmf_optimization.py
+tests/test_simplex_nmf_minibatch8_ablation.py
+tests/test_simplex_nmf_optimized.py
 data/*.mat
 !data/Moffet.mat
 data/*.h5
