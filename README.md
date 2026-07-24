@@ -83,7 +83,7 @@ randomized-row-action-framework/
     `-- .gitkeep
 ```
 
-The `src/` directory is the reusable library. The files under `experiments/` are the canonical scripts for reproducing the paper results. The notebooks preserve readable experiment workflows and are useful for inspection, but the standalone scripts are the reference path for clean-process reproduction.
+The `src/` directory is the reusable library. The files under `experiments/` are the canonical scripts for reproducing the paper results. The notebooks preserve readable experiment workflows and are useful for inspection, but the standalone scripts are the reference path for full process reproduction.
 
 ---
 
@@ -421,7 +421,7 @@ The solver also accepts user-provided `W0` and `H0`. The input `H0` is normalize
 
 ## Notebooks
 
-The notebooks are designed for reading, visual inspection, and interactive reruns of the three paper experiments. The standalone scripts remain the reference path for clean-process reproduction.
+The notebooks are designed for reading, visual inspection, and interactive reruns of the three paper experiments. The standalone scripts remain the reference path for full-process reproduction.
 
 Start JupyterLab from the repository root:
 
@@ -532,18 +532,6 @@ The full NNLS experiment contains long randomized trajectories and repeated runs
 ### Entropy updates overflow or underflow
 
 The softmax implementation subtracts the largest dual component. The multiplicative NMF updates clip their exponent and use a small positive floor. If warnings remain after changing parameters, inspect the step sizes rather than increasing the clipping threshold blindly.
-
----
-
-## Development status
-
-This repository is a clean implementation extracted from three research notebooks. The next development pass should focus on:
-
-- independent mathematical verification against the paper;
-- runtime optimization while preserving the exact iterations;
-- continuous integration;
-- final data download instructions;
-- a frozen submission tag, for example `v1.0-simax-submission`.
 
 ---
 
