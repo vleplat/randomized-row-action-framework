@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the accompanying paper."
+title: "Randomized Row-Action Framework"
+type: software
+authors:
+  - family-names: Leplat
+    given-names: Valentin
+  - family-names: Dong
+    given-names: Zeyu
+  - family-names: Yin
+    given-names: Junfeng
+version: 0.1.0
+date-released: 2026-07-23
+repository-code: "https://github.com/vleplat/randomized-row-action-framework"
+license: MIT

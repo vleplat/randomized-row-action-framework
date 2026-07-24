@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "randomized-row-action-framework"
+version = "0.1.0"
+description = "Randomized row-action methods with convex constraints and Bregman geometry."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [
+  {name = "Valentin Leplat"},
+  {name = "Zeyu Dong"},
+  {name = "Junfeng Yin"},
+]
+dependencies = [
+  "numpy>=1.24",
+  "scipy>=1.10",
+  "matplotlib>=3.7",
+  "h5py>=3.8",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.4",
+  "ruff>=0.5",
+]
+notebooks = [
+  "jupyterlab>=4.0",
+  "ipykernel>=6.25",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]

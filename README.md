@@ -1,0 +1,560 @@
+# Randomized Row-Action Framework
+
+## Project description
+
+This repository contains the Python implementations and numerical experiments associated with the paper
+
+> **Toward a Unified Framework for Randomized Row-Action Methods for Structured Data Fitting and Constraint Geometry**  
+> Valentin Leplat, Zeyu Dong, and Junfeng Yin.
+
+The project studies randomized row-action methods for problems with linear observations, convex constraints, and non-Euclidean geometry. It implements the two algorithmic branches developed in the paper:
+
+1. **Soft constrained data fitting:** primal projected or Bregman-proximal row steps, including noisy nonnegative least squares.
+2. **Hard equality-constrained selectors:** dual Bregman--Kaczmarz steps, including the entropy selector on the simplex.
+
+The repository also contains an alternating entropy row-action method for simplex-structured nonnegative matrix factorization. This third experiment illustrates how the row-action updates can be used as inner block solvers in a nonconvex matrix factorization scheme.
+
+The numerical contributions are intentionally focused. Their purpose is to illustrate the theoretical mechanisms of the paper and to reproduce the reported figures.
+
+---
+
+## Paper and citation
+
+This repository is the reproducibility companion for the paper. The manuscript source is not part of the public code release; the implementation and experiment scripts below are the reference materials for reproducing the numerical figures.
+
+A temporary citation entry is:
+
+```bibtex
+@unpublished{leplat2026rowaction,
+  title  = {Toward a Unified Framework for Randomized Row-Action Methods
+            for Structured Data Fitting and Constraint Geometry},
+  author = {Leplat, Valentin and Dong, Zeyu and Yin, Junfeng},
+  year   = {2026},
+  note   = {Manuscript in preparation}
+}
+```
+
+Please update this entry after submission or publication.
+
+---
+
+## Repository structure
+
+```text
+randomized-row-action-framework/
+|
+|-- README.md
+|-- pyproject.toml
+|-- requirements.txt
+|-- requirements-dev.txt
+|-- LICENSE
+|-- CITATION.cff
+|-- Makefile
+|
+|-- src/randomized_row_action/
+|   |-- __init__.py
+|   |-- nnls.py              # Soft projected row-action NNLS
+|   |-- bregman.py           # Entropy Bregman--Kaczmarz selector
+|   |-- simplex_nmf.py       # Entropy row-action simplex-NMF
+|   |-- datasets.py          # Synthetic data and Moffett loader
+|   `-- _utils.py            # Validation and weighted row sampling
+|
+|-- experiments/
+|   |-- noisy_nnls.py
+|   |-- entropy_selector.py
+|   |-- simplex_nmf.py
+|   `-- _common.py
+|
+|-- notebooks/
+|   |-- 01_noisy_nnls.ipynb
+|   |-- 02_entropy_selector.ipynb
+|   |-- 03_simplex_nmf.ipynb
+|   `-- README.md
+|
+|-- tests/
+|   |-- test_nnls.py
+|   |-- test_bregman.py
+|   `-- test_simplex_nmf.py
+|
+|-- data/
+|   `-- README.md
+|
+`-- figures/
+    `-- .gitkeep
+```
+
+The `src/` directory is the reusable library. The files under `experiments/` are the canonical scripts for reproducing the paper results. The notebooks preserve readable experiment workflows and are useful for inspection, but the standalone scripts are the reference path for clean-process reproduction.
+
+---
+
+## Implemented methods
+
+### Projected randomized row action for noisy NNLS
+
+The solver addresses
+
+```text
+minimize  0.5 ||A x - b||_2^2
+subject to x >= 0.
+```
+
+At each iteration, row `i` is sampled with probability proportional to `||a_i||_2^2`, and the method applies
+
+```text
+x <- max(x - eta_k * (a_i^T x - b_i) * a_i / ||a_i||_2^2, 0).
+```
+
+The implementation records both the last iterate and the weighted average. By default, the average is
+
+```text
+x_bar = sum_k eta_k x_k / sum_k eta_k,
+```
+
+which matches the indexing used in the theorem. A legacy `post_update` option is available only to compare with the original exploratory notebook.
+
+### Entropy Bregman--Kaczmarz selector
+
+The hard equality branch solves
+
+```text
+minimize  sum_j x_j log(x_j)
+subject to A x = b and x in the simplex.
+```
+
+The dual variable is updated row by row, and the primal point is reconstructed by the softmax map. Every primal iterate therefore remains in the relative interior of the simplex.
+
+The implementation monitors:
+
+- `KL(x_hat || x_k)`;
+- `||A x_k - b||_2^2`;
+- the local error-bound ratio `KL(x_hat || x_k) / ||A x_k - b||_2^2`;
+- the relative infinity-distance used to verify the local neighborhood.
+
+### Entropy row-action simplex-NMF
+
+The illustrative factorization problem is
+
+```text
+minimize  0.5 ||X - W H||_F^2
+subject to W >= 0 and every column of H belongs to the simplex.
+```
+
+The algorithm alternates between:
+
+- entropy row-action sweeps for the abundance block `H`;
+- positive-entropy row-action sweeps for the basis block `W`.
+
+A blockwise acceptance rule is used during a short warmup. The accepted step sizes are then kept fixed. This experiment is an algorithmic illustration; the repository does not claim that the paper's convex convergence theorems prove convergence of the full nonconvex alternating scheme.
+
+---
+
+## Quick start
+
+### Step 1: install Python
+
+Python 3.10 or newer is recommended.
+
+Check your version:
+
+```bash
+python3 --version
+```
+
+On Windows PowerShell, use:
+
+```powershell
+py --version
+```
+
+### Step 2: clone the repository
+
+```bash
+git clone https://github.com/vleplat/randomized-row-action-framework.git
+cd randomized-row-action-framework
+```
+
+While the repository is private, use the private clone URL shown by GitHub.
+
+### Step 3: create a virtual environment
+
+On macOS or Linux:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+```
+
+On Windows PowerShell:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+```
+
+### Step 4: install the project
+
+For the experiments only:
+
+```bash
+python -m pip install -e .
+```
+
+For development, tests, linting, and notebooks:
+
+```bash
+python -m pip install -e ".[dev,notebooks]"
+```
+
+An equivalent requirements-based installation is:
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pip install -e .
+```
+
+### Step 5: run the checks
+
+```bash
+python -m pytest
+python -m experiments.simplex_nmf --mode synthetic --profile quick
+```
+
+The NNLS and entropy selector scripts reproduce the full paper experiments and therefore are not used as quick smoke tests. The simplex-NMF synthetic quick profile verifies the factorization pipeline without external data.
+
+Or use the Makefile for tests and linting:
+
+```bash
+make test
+make lint
+```
+
+The full paper commands are listed below.
+
+---
+
+## Reproducing the paper experiments
+
+### 1. Noisy nonnegative least squares
+
+```bash
+python -m experiments.noisy_nnls
+```
+
+Main outputs:
+
+```text
+figures/nnls_noisy/fig_nnls_noisy_weighted_average_gap.pdf
+figures/nnls_noisy/fig_nnls_noisy_last_iterate_gap.pdf
+figures/nnls_noisy/fig_nnls_noisy_stepsize_schedule.pdf
+figures/nnls_noisy/fig_nnls_noisy_constant_eta_floor.pdf
+figures/nnls_noisy/fig_nnls_noisy_horizon_rate.pdf
+figures/nnls_noisy/fig_nnls_noisy_avg_horizon_rate.pdf
+figures/nnls_noisy/fig_nnls_noisy_horizon_rate_last_iterate.pdf
+```
+
+The paper profile uses the dimensions, noise level, horizons, and repetition counts from the numerical section. It may take time because the longest runs contain two million randomized row updates and are repeated across several seeds.
+
+### 2. Entropy selector on the simplex
+
+```bash
+python -m experiments.entropy_selector
+```
+
+Main outputs:
+
+```text
+figures/entropy_selector/fig_bregman_selector_kl_decay.pdf
+figures/entropy_selector/fig_bregman_selector_residual_decay.pdf
+figures/entropy_selector/fig_bregman_selector_error_bound_ratio.pdf
+figures/entropy_selector/fig_bregman_selector_repeated_kl.pdf
+```
+
+The script prints the local theoretical constants, contraction diagnostics, repeated-run statistics, and neighborhood checks.
+
+### 3. Simplex-structured NMF on Moffett Field
+
+Download the Moffett MAT file and place it under `data/`; see `data/README.md`. Then run:
+
+```bash
+python -m experiments.simplex_nmf \
+  --mode moffett \
+  --profile paper \
+  --data data/Moffet.mat \
+  --rank 3 \
+  --output-dir results/simplex_nmf
+```
+
+Main outputs:
+
+```text
+results/simplex_nmf/fig_moffett_abundance_maps_r3.pdf
+results/simplex_nmf/fig_moffett_spectral_signatures_r3.pdf
+results/simplex_nmf/fig_moffett_convergence_r3.pdf
+results/simplex_nmf/fig_moffett_relative_error_r3.pdf
+results/simplex_nmf/fig_moffett_loss_r3.pdf
+results/simplex_nmf/fig_moffett_relative_error_time_r3.pdf
+results/simplex_nmf/fig_moffett_stepsizes_r3.pdf
+results/simplex_nmf/factors.npz
+results/simplex_nmf/history.npz
+results/simplex_nmf/summary.json
+```
+
+#### Arguments
+
+| Argument | Default | Meaning |
+|---|---:|---|
+| `--mode` | `synthetic` | Use `synthetic` without external data or `moffett` for the paper experiment. |
+| `--profile` | `quick` | Short validation or full paper configuration. |
+| `--data` | none | Path to `Moffet.mat`; required in Moffett mode. |
+| `--rank` | `3` | Factorization rank. |
+| `--seed` | `123` | Initialization and row-order seed. |
+| `--output-dir` | `results/simplex_nmf` | Output directory. |
+| `--show` | off | Display figures interactively. |
+
+The paper labels the three components as water, vegetation, and soil after sorting them by increasing column norm of `W`. The component order is saved in `factors.npz` and `summary.json`. Verify these labels visually if algorithmic parameters or seeds are changed.
+
+The contextual Moffett scene/crop image currently shown in the manuscript is not generated by this script. Before writing that *all* figures are reproducible from the repository, replace that image by one generated from distributable source data or document the required permission and generation procedure.
+
+---
+
+## Using the core functions
+
+### Noisy NNLS
+
+```python
+from randomized_row_action import (
+    StepSchedule,
+    make_noisy_nnls_data,
+    nnls_objective,
+    projected_row_action_nnls,
+    solve_nnls_reference,
+)
+
+A, b, x_true, clean, noise = make_noisy_nnls_data(
+    m=1000,
+    n=200,
+    sparsity=0.25,
+    noise_level=0.05,
+    seed=8,
+)
+
+x_star, info = solve_nnls_reference(A, b)
+f_star = nnls_objective(A, b, x_star)
+
+result = projected_row_action_nnls(
+    A,
+    b,
+    n_iterations=200_000,
+    schedule=StepSchedule("constant", 0.2),
+    seed=20,
+    x_star=x_star,
+    f_star=f_star,
+    record_every=A.shape[0],
+)
+
+x_last = result.x_last
+x_average = result.x_average
+history = result.history
+```
+
+Available schedules are:
+
+```python
+StepSchedule("constant", eta0=0.2)
+StepSchedule("horizon_sqrt", eta0=0.9)
+StepSchedule("diminishing_sqrt", eta0=0.9)
+```
+
+### Entropy Bregman--Kaczmarz selector
+
+```python
+from randomized_row_action import (
+    entropy_bregman_kaczmarz,
+    make_entropy_selector_instance,
+)
+
+instance = make_entropy_selector_instance(m=1000, n=200, seed=7)
+
+result = entropy_bregman_kaczmarz(
+    instance["A"],
+    instance["b"],
+    x_hat=instance["x_hat"],
+    u0=instance["u0"],
+    n_iterations=200 * 1000,
+    eta=1.0,
+    seed=20,
+    record_every=200,
+)
+
+x_last = result.x_last
+history = result.history
+```
+
+### Simplex-structured NMF
+
+```python
+from randomized_row_action import entropy_row_action_simplex_nmf
+
+result = entropy_row_action_simplex_nmf(
+    X,
+    rank=3,
+    n_outer=800,
+    eta_H0=1.0,
+    eta_W0=0.01,
+    eta_H_max=2.0,
+    eta_W_max=0.1,
+    line_search_mode="warmup",
+    warmup_outer=40,
+    seed=123,
+)
+
+W = result.W
+H = result.H
+history = result.history
+```
+
+The solver also accepts user-provided `W0` and `H0`. The input `H0` is normalized columnwise before the first iteration.
+
+---
+
+## Notebooks
+
+The notebooks are designed for reading, visual inspection, and interactive reruns of the three paper experiments. The standalone scripts remain the reference path for clean-process reproduction.
+
+Start JupyterLab from the repository root:
+
+```bash
+jupyter lab
+```
+
+Then open one of:
+
+```text
+notebooks/01_noisy_nnls.ipynb
+notebooks/02_entropy_selector.ipynb
+notebooks/03_simplex_nmf.ipynb
+```
+
+Use **Restart Kernel and Run All Cells** before trusting notebook outputs, because notebooks can contain saved output from earlier executions.
+
+---
+
+## Tests and development checks
+
+Run the unit tests:
+
+```bash
+python -m pytest
+```
+
+Run the linter:
+
+```bash
+python -m ruff check src experiments tests
+```
+
+Or use:
+
+```bash
+make test
+make lint
+```
+
+The current test suite checks:
+
+- nonnegativity preservation for projected NNLS;
+- simplex preservation and residual decay for the entropy selector;
+- shape, positivity, simplex feasibility, and finite histories for simplex-NMF.
+
+Before public release, a continuous-integration workflow should run these checks automatically on Linux, macOS, and Windows.
+
+---
+
+## Reproducibility notes
+
+- Random seeds are explicit in all experiment scripts.
+- The NNLS and entropy selector scripts run the paper-sized experiments directly and save their PDFs under `figures/`.
+- The simplex-NMF script keeps `quick` and `paper` profiles and saves figures, histories, factors, and `summary.json` under `results/simplex_nmf`.
+- Figures are generated by the scripts or notebooks, not copied from exploratory outputs.
+
+The NNLS weighted average uses the pre-update iterates `x_k`, matching the theorem indexing.
+
+---
+
+## Headless execution
+
+On a server without a graphical interface, set a noninteractive Matplotlib backend.
+
+On macOS or Linux:
+
+```bash
+export MPLBACKEND=Agg
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:MPLBACKEND = "Agg"
+```
+
+Then run the experiment scripts normally.
+
+---
+
+## Troubleshooting
+
+### `ModuleNotFoundError: No module named 'randomized_row_action'`
+
+Install the repository in editable mode from its root:
+
+```bash
+python -m pip install -e .
+```
+
+Then confirm that the active Python interpreter belongs to the intended virtual environment.
+
+### The Moffett file cannot be found
+
+Pass the path explicitly:
+
+```bash
+python -m experiments.simplex_nmf --mode moffett --data /full/path/to/Moffet.mat
+```
+
+The expected matrix has shape `159 x 2500`, or its transpose.
+
+### A paper experiment is slow
+
+The full NNLS experiment contains long randomized trajectories and repeated runs. The script batches sampled row indices to reduce overhead, but it still performs the full paper-sized computation.
+
+### Entropy updates overflow or underflow
+
+The softmax implementation subtracts the largest dual component. The multiplicative NMF updates clip their exponent and use a small positive floor. If warnings remain after changing parameters, inspect the step sizes rather than increasing the clipping threshold blindly.
+
+---
+
+## Development status
+
+This repository is a clean implementation extracted from three research notebooks. The next development pass should focus on:
+
+- independent mathematical verification against the paper;
+- runtime optimization while preserving the exact iterations;
+- continuous integration;
+- final data download instructions;
+- a frozen submission tag, for example `v1.0-simax-submission`.
+
+---
+
+## License and credits
+
+The code is released under the MIT License.
+
+Authors and development:
+
+- Valentin Leplat
+- Zeyu Dong
+- Junfeng Yin
+
+The repository was prepared from the numerical notebooks developed for the accompanying paper. Questions about the mathematics should be resolved against the manuscript before changing an algorithmic formula.

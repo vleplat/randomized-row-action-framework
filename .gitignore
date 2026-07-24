@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+build/
+dist/
+
+# Environments
+.venv/
+venv/
+uraf/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Test and lint caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local data and generated results
+CURSOR_PROMPT.md
+data/*.mat
+!data/Moffet.mat
+data/*.h5
+data/*.hdf5
+docs/
+paper/
+figures/*.pdf
+figures/*.png
+figures/**/*.pdf
+figures/**/*.png
+figures_nnls_noisy/
+figures_bregman_selector/
+figures_moffett/
+notebooks/figures_nnls_noisy/
+notebooks/figures_bregman_selector/
+notebooks/figures_moffett/
+results/
+
+# Keep documentation placeholders
+!data/README.md
+!figures/.gitkeep
