@@ -50,29 +50,120 @@ def test_fixed_steps_and_batch_size_are_exact() -> None:
         np.testing.assert_allclose(result["history"]["eta_W"], 0.01)
 
 
-def test_minibatch_formula_matches_direct_block_update() -> None:
+def test_optimized_single_row_trajectory_matches_original() -> None:
+    X, _W_true, _H_true = _small_problem()
+    config = comparison.ComparisonConfig(seed=123, n_outer=3)
+    W0, H0 = comparison.initial_factors(X, config.rank, config.seed)
+    original = comparison.run_single_row_fixed_original(X, W0.copy(), H0.copy(), config)
+    numpy_optimized = comparison.run_single_row_fixed_numpy(X, W0.copy(), H0.copy(), config)
+    selected = comparison.run_single_row_fixed(X, W0.copy(), H0.copy(), config)
+    for candidate in (numpy_optimized, selected):
+        np.testing.assert_allclose(candidate["W"], original["W"], rtol=1e-12, atol=1e-13)
+        np.testing.assert_allclose(candidate["H"], original["H"], rtol=1e-12, atol=1e-13)
+        np.testing.assert_allclose(
+            candidate["history"]["objective"],
+            original["history"]["objective"],
+            rtol=1e-12,
+            atol=1e-12,
+        )
+        np.testing.assert_allclose(
+            candidate["history"]["relative_error"],
+            original["history"]["relative_error"],
+            rtol=1e-12,
+            atol=1e-13,
+        )
+
+
+def test_gram_eigenvalue_matches_squared_spectral_norm() -> None:
+    rng = np.random.default_rng(7)
+    for matrix in (rng.random((8, 3)), rng.random((3, 8))):
+        expected = float(np.linalg.norm(matrix, 2) ** 2)
+        observed = comparison._largest_gram_eigenvalue(
+            matrix,
+            transpose_first=matrix.shape[0] >= matrix.shape[1],
+        )
+        np.testing.assert_allclose(observed, expected, rtol=1e-14, atol=1e-14)
+
+
+def test_optimized_minibatch_updates_match_original() -> None:
     X, W, H = _small_problem()
     H = normalize_simplex_columns(H)
-    rng = np.random.default_rng(7)
-    rows = rng.choice(W.shape[0], size=4, replace=False)
-    W_batch = W[rows]
-    residual = W_batch @ H - X[rows]
-    gradient = W_batch.T @ residual
-    lipschitz = max(float(np.linalg.norm(W_batch, 2) ** 2), comparison.FLOOR)
-    expected = normalize_simplex_columns(
-        H * np.exp(np.clip(-0.1 * gradient / lipschitz, -comparison.EXPONENT_CLIP, comparison.EXPONENT_CLIP)),
-        floor=comparison.FLOOR,
+    H_original = comparison.minibatch_H_update_original(
+        X,
+        W,
+        H,
+        np.random.default_rng(7),
+        eta=0.1,
+        batch_size=4,
+    )
+    H_optimized = comparison.minibatch_H_update(
+        X,
+        W,
+        H,
+        np.random.default_rng(7),
+        eta=0.1,
+        batch_size=4,
+    )
+    np.testing.assert_allclose(H_optimized, H_original, rtol=1e-13, atol=1e-14)
+
+    W_original = comparison.minibatch_W_update_original(
+        X,
+        W,
+        H,
+        np.random.default_rng(11),
+        eta=0.01,
+        batch_size=4,
+    )
+    W_optimized = comparison.minibatch_W_update(
+        X,
+        W,
+        H,
+        np.random.default_rng(11),
+        eta=0.01,
+        batch_size=4,
+    )
+    np.testing.assert_allclose(W_optimized, W_original, rtol=1e-13, atol=1e-14)
+
+
+def test_optimized_minibatch_trajectory_matches_original() -> None:
+    X, _W_true, _H_true = _small_problem()
+    config = comparison.ComparisonConfig(seed=123, n_outer=3)
+    W0, H0 = comparison.initial_factors(X, config.rank, config.seed)
+    original = comparison.run_minibatch8_fixed_original(X, W0.copy(), H0.copy(), config)
+    optimized = comparison.run_minibatch8_fixed(X, W0.copy(), H0.copy(), config)
+    np.testing.assert_allclose(optimized["W"], original["W"], rtol=1e-12, atol=1e-13)
+    np.testing.assert_allclose(optimized["H"], original["H"], rtol=1e-12, atol=1e-13)
+    np.testing.assert_allclose(
+        optimized["history"]["objective"],
+        original["history"]["objective"],
+        rtol=1e-12,
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        optimized["history"]["relative_error"],
+        original["history"]["relative_error"],
+        rtol=1e-12,
+        atol=1e-13,
     )
 
-    replay_rng = np.random.default_rng(7)
-    observed = comparison.minibatch_H_update(X, W, H, replay_rng, eta=0.1, batch_size=4)
-    # With m=10 and batch_size=4 there are three blocks, so compare the first block explicitly.
-    first_block = normalize_simplex_columns(
-        H * np.exp(np.clip(-0.1 * gradient / lipschitz, -comparison.EXPONENT_CLIP, comparison.EXPONENT_CLIP)),
-        floor=comparison.FLOOR,
+
+def test_batched_eigensolver_matches_previous_stable_trajectory() -> None:
+    X, _W_true, _H_true = _small_problem()
+    config = comparison.ComparisonConfig(seed=123, n_outer=3)
+    W0, H0 = comparison.initial_factors(X, config.rank, config.seed)
+    previous = comparison.run_minibatch8_fixed_unbatched_eigh(
+        X, W0.copy(), H0.copy(), config
     )
-    assert expected.shape == observed.shape
-    np.testing.assert_allclose(first_block.sum(axis=0), 1.0)
+    integrated = comparison.run_minibatch8_fixed(X, W0.copy(), H0.copy(), config)
+    np.testing.assert_array_equal(integrated["W"], previous["W"])
+    np.testing.assert_array_equal(integrated["H"], previous["H"])
+    np.testing.assert_array_equal(
+        integrated["history"]["objective"], previous["history"]["objective"]
+    )
+    np.testing.assert_array_equal(
+        integrated["history"]["relative_error"],
+        previous["history"]["relative_error"],
+    )
 
 
 def test_constraints_and_finiteness() -> None:

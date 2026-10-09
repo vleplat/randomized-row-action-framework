@@ -351,7 +351,9 @@ python -m experiments.simplex_nmf_benchmark \
   --figure-dir figures/simplex_nmf_comparison
 ```
 
-The script uses the same Moffett crop and preprocessing as `experiments.simplex_nmf.py`, with rank `3`, seed `123`, and 200 outer iterations. It creates one common initialization (`W0`, `H0`) and passes exact copies to all three methods. The single-row method uses fixed stepsizes `eta_H=0.1`, `eta_W=0.01`, no warmup, and no line search. The mini-batch method uses the same fixed stepsizes with batch size `8`.
+The script uses the same Moffett crop and preprocessing as `experiments.simplex_nmf.py`, with rank `3`, seed `123`, and 200 outer iterations. It creates one common initialization (`W0`, `H0`) and passes exact copies to all three methods. The single-row method uses fixed stepsizes `eta_H=0.1`, `eta_W=0.01`, no warmup, and no line search. The mini-batch method uses the same fixed stepsizes with batch size `8`. Its implementation evaluates squared spectral norms through equivalent rank-by-rank Gram-matrix eigenproblems, batches the independent small eigensolver calls within each sweep, and uses safe in-place NumPy operations; the sampling and mathematical updates are unchanged.
+
+The single-row update loops are compiled with Numba while the original NumPy RNG still generates the sampling permutations in the same order. An allocation-reduced NumPy fallback is retained. These implementation optimizations do not change the sampling or mathematical updates.
 
 The deterministic reference uses the implementation accompanying the Python version of Nicolas Gillis's NMF book. It applies two-block coordinate descent: with one factor fixed, the other convex block subproblem is solved using a Nesterov-type accelerated projected-gradient method. Projection is performed onto the nonnegative orthant for `W` and onto the product of simplices for `H`. The implementation is called with `model=4` and `lam=0.0`, so the log-determinant volume penalty is disabled and the comparison concerns the same reconstruction objective and simplex constraints.
 

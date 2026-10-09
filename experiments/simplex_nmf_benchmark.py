@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -39,6 +40,11 @@ from randomized_row_action.simplex_nmf import (
     relative_reconstruction_error,
     simplex_violation,
 )
+
+try:
+    from numba import njit
+except ModuleNotFoundError:
+    njit = None
 
 METHODS = ("single_row_fixed", "minibatch8_fixed", "reference")
 DISPLAY_NAMES = {
@@ -142,11 +148,16 @@ def record_history(
     w_time: float,
     eta_H: float,
     eta_W: float,
+    norm_X: float | None = None,
 ) -> None:
     simplex_sum, h_negativity = simplex_violation(H)
+    residual = X - W @ H
+    squared_residual = float(np.sum(residual * residual))
+    if norm_X is None:
+        norm_X = max(float(np.linalg.norm(X, "fro")), np.finfo(float).tiny)
     history["outer_iteration"].append(float(outer))
-    history["objective"].append(nmf_loss(X, W, H))
-    history["relative_error"].append(relative_reconstruction_error(X, W, H))
+    history["objective"].append(0.5 * squared_residual)
+    history["relative_error"].append(float(np.sqrt(squared_residual) / norm_X))
     history["time"].append(perf_counter() - started)
     history["H_update_time"].append(h_time)
     history["W_update_time"].append(w_time)
@@ -161,15 +172,223 @@ def as_arrays(history: dict[str, list[float]]) -> dict[str, np.ndarray]:
     return {key: np.asarray(values, dtype=float) for key, values in history.items()}
 
 
-def run_single_row_fixed(
+def record_history_original(
+    X: np.ndarray,
+    W: np.ndarray,
+    H: np.ndarray,
+    history: dict[str, list[float]],
+    outer: int,
+    started: float,
+    *,
+    h_time: float,
+    w_time: float,
+    eta_H: float,
+    eta_W: float,
+    norm_X: float | None = None,
+) -> None:
+    """Record metrics using the original two-reconstruction implementation."""
+    del norm_X
+    simplex_sum, h_negativity = simplex_violation(H)
+    history["outer_iteration"].append(float(outer))
+    history["objective"].append(nmf_loss(X, W, H))
+    history["relative_error"].append(relative_reconstruction_error(X, W, H))
+    history["time"].append(perf_counter() - started)
+    history["H_update_time"].append(h_time)
+    history["W_update_time"].append(w_time)
+    history["simplex_violation"].append(simplex_sum)
+    history["H_negativity"].append(h_negativity)
+    history["W_negativity"].append(nonnegativity_violation(W))
+    history["eta_H"].append(float(eta_H))
+    history["eta_W"].append(float(eta_W))
+
+
+def entropy_H_sweep_numpy_optimized(
+    X: np.ndarray,
+    W: np.ndarray,
+    H: np.ndarray,
+    *,
+    eta: float,
+    row_order: np.ndarray,
+    floor: float = FLOOR,
+    exponent_clip: float = EXPONENT_CLIP,
+) -> np.ndarray:
+    """Allocation-reduced NumPy implementation of one single-row H sweep."""
+    updated = H.copy()
+    denominators = np.sum(W * W, axis=1) + floor
+    residual = np.empty(X.shape[1], dtype=updated.dtype)
+    exponent = np.empty_like(updated)
+    column_sums = np.empty(X.shape[1], dtype=updated.dtype)
+    for row_index in row_order:
+        row = W[row_index]
+        np.matmul(row, updated, out=residual)
+        residual -= X[row_index]
+        np.multiply(row[:, None], residual[None, :], out=exponent)
+        exponent *= -eta / denominators[row_index]
+        np.clip(exponent, -exponent_clip, exponent_clip, out=exponent)
+        np.exp(exponent, out=exponent)
+        updated *= exponent
+        np.maximum(updated, floor, out=updated)
+        np.sum(updated, axis=0, out=column_sums)
+        np.maximum(column_sums, floor, out=column_sums)
+        updated /= column_sums[None, :]
+    return updated
+
+
+def entropy_W_sweep_numpy_optimized(
+    X: np.ndarray,
+    W: np.ndarray,
+    H: np.ndarray,
+    *,
+    eta: float,
+    column_order: np.ndarray,
+    floor: float = FLOOR,
+    exponent_clip: float = EXPONENT_CLIP,
+) -> np.ndarray:
+    """Allocation-reduced NumPy implementation of one single-column W sweep."""
+    updated = W.copy()
+    denominators = np.sum(H * H, axis=0) + floor
+    residual = np.empty(X.shape[0], dtype=updated.dtype)
+    exponent = np.empty_like(updated)
+    for column_index in column_order:
+        abundance = H[:, column_index]
+        np.matmul(updated, abundance, out=residual)
+        residual -= X[:, column_index]
+        np.multiply(residual[:, None], abundance[None, :], out=exponent)
+        exponent *= -eta / denominators[column_index]
+        np.clip(exponent, -exponent_clip, exponent_clip, out=exponent)
+        np.exp(exponent, out=exponent)
+        updated *= exponent
+        np.maximum(updated, floor, out=updated)
+    return updated
+
+
+if njit is not None:
+
+    @njit
+    def _entropy_H_sweep_numba_kernel(
+        X: np.ndarray,
+        W: np.ndarray,
+        H: np.ndarray,
+        eta: float,
+        row_order: np.ndarray,
+        floor: float,
+        exponent_clip: float,
+    ) -> np.ndarray:
+        updated = H.copy()
+        rank, n_samples = updated.shape
+        for order_index in range(row_order.size):
+            row_index = row_order[order_index]
+            denominator = floor
+            for component in range(rank):
+                denominator += W[row_index, component] * W[row_index, component]
+            for sample in range(n_samples):
+                residual = -X[row_index, sample]
+                for component in range(rank):
+                    residual += W[row_index, component] * updated[component, sample]
+                column_sum = 0.0
+                for component in range(rank):
+                    exponent = -eta * W[row_index, component] * residual / denominator
+                    exponent = min(exponent_clip, max(-exponent_clip, exponent))
+                    value = updated[component, sample] * math.exp(exponent)
+                    value = max(value, floor)
+                    updated[component, sample] = value
+                    column_sum += value
+                column_sum = max(column_sum, floor)
+                for component in range(rank):
+                    updated[component, sample] /= column_sum
+        return updated
+
+
+    @njit
+    def _entropy_W_sweep_numba_kernel(
+        X: np.ndarray,
+        W: np.ndarray,
+        H: np.ndarray,
+        eta: float,
+        column_order: np.ndarray,
+        floor: float,
+        exponent_clip: float,
+    ) -> np.ndarray:
+        updated = W.copy()
+        n_rows, rank = updated.shape
+        for order_index in range(column_order.size):
+            column_index = column_order[order_index]
+            denominator = floor
+            for component in range(rank):
+                denominator += H[component, column_index] * H[component, column_index]
+            for row in range(n_rows):
+                residual = -X[row, column_index]
+                for component in range(rank):
+                    residual += updated[row, component] * H[component, column_index]
+                for component in range(rank):
+                    exponent = -eta * residual * H[component, column_index] / denominator
+                    exponent = min(exponent_clip, max(-exponent_clip, exponent))
+                    value = updated[row, component] * math.exp(exponent)
+                    updated[row, component] = max(value, floor)
+        return updated
+
+else:
+    _entropy_H_sweep_numba_kernel = None
+    _entropy_W_sweep_numba_kernel = None
+
+
+def numba_available() -> bool:
+    return _entropy_H_sweep_numba_kernel is not None and _entropy_W_sweep_numba_kernel is not None
+
+
+def entropy_H_sweep_numba(
+    X: np.ndarray,
+    W: np.ndarray,
+    H: np.ndarray,
+    *,
+    eta: float,
+    row_order: np.ndarray,
+    floor: float = FLOOR,
+    exponent_clip: float = EXPONENT_CLIP,
+) -> np.ndarray:
+    if _entropy_H_sweep_numba_kernel is None:
+        raise RuntimeError("Numba is not installed; use the NumPy fallback.")
+    return _entropy_H_sweep_numba_kernel(X, W, H, eta, row_order, floor, exponent_clip)
+
+
+def entropy_W_sweep_numba(
+    X: np.ndarray,
+    W: np.ndarray,
+    H: np.ndarray,
+    *,
+    eta: float,
+    column_order: np.ndarray,
+    floor: float = FLOOR,
+    exponent_clip: float = EXPONENT_CLIP,
+) -> np.ndarray:
+    if _entropy_W_sweep_numba_kernel is None:
+        raise RuntimeError("Numba is not installed; use the NumPy fallback.")
+    return _entropy_W_sweep_numba_kernel(X, W, H, eta, column_order, floor, exponent_clip)
+
+
+def _compile_numba_single_row_kernels(X: np.ndarray, W: np.ndarray, H: np.ndarray) -> None:
+    if not numba_available():
+        return
+    prepared_W = W.copy()
+    prepared_H = normalize_simplex_columns(H.copy())
+    empty_order = np.empty(0, dtype=np.int64)
+    entropy_H_sweep_numba(X, prepared_W, prepared_H, eta=0.1, row_order=empty_order)
+    entropy_W_sweep_numba(X, prepared_W, prepared_H, eta=0.01, column_order=empty_order)
+
+
+def _run_single_row_fixed(
     X: np.ndarray,
     W0: np.ndarray,
     H0: np.ndarray,
     config: ComparisonConfig,
+    *,
+    h_sweep: Any,
+    w_sweep: Any,
 ) -> dict[str, Any]:
     W = W0.copy()
     H = normalize_simplex_columns(H0.copy())
     rng = paper_sampling_rng(X, config.rank, config.seed)
+    norm_X = max(float(np.linalg.norm(X, "fro")), np.finfo(float).tiny)
     started = perf_counter()
     h_time = 0.0
     w_time = 0.0
@@ -185,11 +404,12 @@ def run_single_row_fixed(
         w_time=w_time,
         eta_H=config.eta_H,
         eta_W=config.eta_W,
+        norm_X=norm_X,
     )
     for outer in range(1, config.n_outer + 1):
         row_order = rng.permutation(X.shape[0])
         block_started = perf_counter()
-        H = entropy_H_sweep(
+        H = h_sweep(
             X,
             W,
             H,
@@ -201,7 +421,7 @@ def run_single_row_fixed(
         h_time += perf_counter() - block_started
         column_order = rng.permutation(X.shape[1])
         block_started = perf_counter()
-        W = entropy_W_sweep(
+        W = w_sweep(
             X,
             W,
             H,
@@ -222,11 +442,78 @@ def run_single_row_fixed(
             w_time=w_time,
             eta_H=config.eta_H,
             eta_W=config.eta_W,
+            norm_X=norm_X,
         )
     return {"W": W, "H": H, "history": as_arrays(history)}
 
 
-def minibatch_H_update(
+def run_single_row_fixed_original(
+    X: np.ndarray,
+    W0: np.ndarray,
+    H0: np.ndarray,
+    config: ComparisonConfig,
+) -> dict[str, Any]:
+    """Run the original NumPy update kernels with optimized diagnostics."""
+    return _run_single_row_fixed(
+        X,
+        W0,
+        H0,
+        config,
+        h_sweep=entropy_H_sweep,
+        w_sweep=entropy_W_sweep,
+    )
+
+
+def run_single_row_fixed_numpy(
+    X: np.ndarray,
+    W0: np.ndarray,
+    H0: np.ndarray,
+    config: ComparisonConfig,
+) -> dict[str, Any]:
+    """Run the allocation-reduced NumPy fallback."""
+    return _run_single_row_fixed(
+        X,
+        W0,
+        H0,
+        config,
+        h_sweep=entropy_H_sweep_numpy_optimized,
+        w_sweep=entropy_W_sweep_numpy_optimized,
+    )
+
+
+def run_single_row_fixed_numba(
+    X: np.ndarray,
+    W0: np.ndarray,
+    H0: np.ndarray,
+    config: ComparisonConfig,
+) -> dict[str, Any]:
+    """Run the compiled single-row kernels, excluding one-time compilation."""
+    if not numba_available():
+        raise RuntimeError("Numba is not installed; use run_single_row_fixed_numpy.")
+    _compile_numba_single_row_kernels(X, W0, H0)
+    return _run_single_row_fixed(
+        X,
+        W0,
+        H0,
+        config,
+        h_sweep=entropy_H_sweep_numba,
+        w_sweep=entropy_W_sweep_numba,
+    )
+
+
+def run_single_row_fixed(
+    X: np.ndarray,
+    W0: np.ndarray,
+    H0: np.ndarray,
+    config: ComparisonConfig,
+) -> dict[str, Any]:
+    """Use compiled kernels when available, otherwise the optimized NumPy fallback."""
+    if numba_available():
+        return run_single_row_fixed_numba(X, W0, H0, config)
+    return run_single_row_fixed_numpy(X, W0, H0, config)
+
+
+def minibatch_H_update_original(
     X: np.ndarray,
     W: np.ndarray,
     H: np.ndarray,
@@ -248,7 +535,7 @@ def minibatch_H_update(
     return updated
 
 
-def minibatch_W_update(
+def minibatch_W_update_original(
     X: np.ndarray,
     W: np.ndarray,
     H: np.ndarray,
@@ -270,20 +557,168 @@ def minibatch_W_update(
     return updated
 
 
-def run_minibatch8_fixed(
+def _largest_gram_eigenvalue(matrix: np.ndarray, *, transpose_first: bool) -> float:
+    """Return the squared spectral norm from the smaller symmetric Gram matrix."""
+    gram = matrix.T @ matrix if transpose_first else matrix @ matrix.T
+    return max(float(np.linalg.eigvalsh(gram)[-1]), FLOOR)
+
+
+def _normalize_simplex_columns_inplace(H: np.ndarray) -> None:
+    """Apply the same flooring and column normalization in place."""
+    np.maximum(H, FLOOR, out=H)
+    column_sums = np.sum(H, axis=0, keepdims=True)
+    np.maximum(column_sums, FLOOR, out=column_sums)
+    H /= column_sums
+
+
+def minibatch_H_update_unbatched_eigh(
+    X: np.ndarray,
+    W: np.ndarray,
+    H: np.ndarray,
+    rng: np.random.Generator,
+    *,
+    eta: float,
+    batch_size: int,
+) -> np.ndarray:
+    """Previous stable H sweep with one eigensolver call per sampled block."""
+    updated = H.copy()
+    n_batches = int(np.ceil(W.shape[0] / batch_size))
+    for _batch in range(n_batches):
+        rows = rng.choice(W.shape[0], size=min(batch_size, W.shape[0]), replace=False)
+        W_batch = W[rows]
+        residual = W_batch @ updated
+        residual -= X[rows]
+        gradient = W_batch.T @ residual
+        lipschitz = _largest_gram_eigenvalue(W_batch, transpose_first=True)
+        gradient *= -eta / lipschitz
+        np.clip(gradient, -EXPONENT_CLIP, EXPONENT_CLIP, out=gradient)
+        np.exp(gradient, out=gradient)
+        updated *= gradient
+        _normalize_simplex_columns_inplace(updated)
+    return updated
+
+
+def minibatch_W_update_unbatched_eigh(
+    X: np.ndarray,
+    W: np.ndarray,
+    H: np.ndarray,
+    rng: np.random.Generator,
+    *,
+    eta: float,
+    batch_size: int,
+) -> np.ndarray:
+    """Previous stable W sweep with one eigensolver call per sampled block."""
+    updated = W.copy()
+    n_batches = int(np.ceil(H.shape[1] / batch_size))
+    for _batch in range(n_batches):
+        columns = rng.choice(H.shape[1], size=min(batch_size, H.shape[1]), replace=False)
+        H_batch = H[:, columns]
+        residual = updated @ H_batch
+        residual -= X[:, columns]
+        gradient = residual @ H_batch.T
+        lipschitz = _largest_gram_eigenvalue(H_batch, transpose_first=False)
+        gradient *= -eta / lipschitz
+        np.clip(gradient, -EXPONENT_CLIP, EXPONENT_CLIP, out=gradient)
+        np.exp(gradient, out=gradient)
+        updated *= gradient
+        np.maximum(updated, FLOOR, out=updated)
+    return updated
+
+
+def _sample_minibatches(
+    rng: np.random.Generator,
+    population: int,
+    batch_size: int,
+) -> np.ndarray:
+    n_batches = int(np.ceil(population / batch_size))
+    width = min(batch_size, population)
+    blocks = np.empty((n_batches, width), dtype=np.int64)
+    for index in range(n_batches):
+        blocks[index] = rng.choice(population, size=width, replace=False)
+    return blocks
+
+
+def _batched_lipschitz_for_W_rows(W: np.ndarray, blocks: np.ndarray) -> np.ndarray:
+    grams = np.stack([W[rows].T @ W[rows] for rows in blocks])
+    return np.maximum(np.linalg.eigvalsh(grams)[:, -1], FLOOR)
+
+
+def _batched_lipschitz_for_H_columns(H: np.ndarray, blocks: np.ndarray) -> np.ndarray:
+    grams = np.stack([H[:, columns] @ H[:, columns].T for columns in blocks])
+    return np.maximum(np.linalg.eigvalsh(grams)[:, -1], FLOOR)
+
+
+def minibatch_H_update(
+    X: np.ndarray,
+    W: np.ndarray,
+    H: np.ndarray,
+    rng: np.random.Generator,
+    *,
+    eta: float,
+    batch_size: int,
+) -> np.ndarray:
+    """Validated H sweep with equivalent batched Gram eigensolver calls."""
+    updated = H.copy()
+    blocks = _sample_minibatches(rng, W.shape[0], batch_size)
+    lipschitz_values = _batched_lipschitz_for_W_rows(W, blocks)
+    for rows, lipschitz in zip(blocks, lipschitz_values, strict=True):
+        W_batch = W[rows]
+        residual = W_batch @ updated
+        residual -= X[rows]
+        gradient = W_batch.T @ residual
+        gradient *= -eta / max(float(lipschitz), FLOOR)
+        np.clip(gradient, -EXPONENT_CLIP, EXPONENT_CLIP, out=gradient)
+        np.exp(gradient, out=gradient)
+        updated *= gradient
+        _normalize_simplex_columns_inplace(updated)
+    return updated
+
+
+def minibatch_W_update(
+    X: np.ndarray,
+    W: np.ndarray,
+    H: np.ndarray,
+    rng: np.random.Generator,
+    *,
+    eta: float,
+    batch_size: int,
+) -> np.ndarray:
+    """Validated W sweep with equivalent batched Gram eigensolver calls."""
+    updated = W.copy()
+    blocks = _sample_minibatches(rng, H.shape[1], batch_size)
+    lipschitz_values = _batched_lipschitz_for_H_columns(H, blocks)
+    for columns, lipschitz in zip(blocks, lipschitz_values, strict=True):
+        H_batch = H[:, columns]
+        residual = updated @ H_batch
+        residual -= X[:, columns]
+        gradient = residual @ H_batch.T
+        gradient *= -eta / max(float(lipschitz), FLOOR)
+        np.clip(gradient, -EXPONENT_CLIP, EXPONENT_CLIP, out=gradient)
+        np.exp(gradient, out=gradient)
+        updated *= gradient
+        np.maximum(updated, FLOOR, out=updated)
+    return updated
+
+
+def _run_minibatch8_fixed(
     X: np.ndarray,
     W0: np.ndarray,
     H0: np.ndarray,
     config: ComparisonConfig,
+    *,
+    h_update: Any,
+    w_update: Any,
+    recorder: Any,
 ) -> dict[str, Any]:
     W = W0.copy()
     H = normalize_simplex_columns(H0.copy())
     rng = np.random.default_rng(config.seed)
+    norm_X = max(float(np.linalg.norm(X, "fro")), np.finfo(float).tiny)
     started = perf_counter()
     h_time = 0.0
     w_time = 0.0
     history = empty_history()
-    record_history(
+    recorder(
         X,
         W,
         H,
@@ -294,15 +729,16 @@ def run_minibatch8_fixed(
         w_time=w_time,
         eta_H=config.eta_H,
         eta_W=config.eta_W,
+        norm_X=norm_X,
     )
     for outer in range(1, config.n_outer + 1):
         block_started = perf_counter()
-        H = minibatch_H_update(X, W, H, rng, eta=config.eta_H, batch_size=config.batch_size)
+        H = h_update(X, W, H, rng, eta=config.eta_H, batch_size=config.batch_size)
         h_time += perf_counter() - block_started
         block_started = perf_counter()
-        W = minibatch_W_update(X, W, H, rng, eta=config.eta_W, batch_size=config.batch_size)
+        W = w_update(X, W, H, rng, eta=config.eta_W, batch_size=config.batch_size)
         w_time += perf_counter() - block_started
-        record_history(
+        recorder(
             X,
             W,
             H,
@@ -313,8 +749,63 @@ def run_minibatch8_fixed(
             w_time=w_time,
             eta_H=config.eta_H,
             eta_W=config.eta_W,
+            norm_X=norm_X,
         )
     return {"W": W, "H": H, "history": as_arrays(history)}
+
+
+def run_minibatch8_fixed_original(
+    X: np.ndarray,
+    W0: np.ndarray,
+    H0: np.ndarray,
+    config: ComparisonConfig,
+) -> dict[str, Any]:
+    """Run the frozen pre-optimization implementation for audit comparisons."""
+    return _run_minibatch8_fixed(
+        X,
+        W0,
+        H0,
+        config,
+        h_update=minibatch_H_update_original,
+        w_update=minibatch_W_update_original,
+        recorder=record_history_original,
+    )
+
+
+def run_minibatch8_fixed(
+    X: np.ndarray,
+    W0: np.ndarray,
+    H0: np.ndarray,
+    config: ComparisonConfig,
+) -> dict[str, Any]:
+    """Run the optimized, mathematically equivalent mini-batch implementation."""
+    return _run_minibatch8_fixed(
+        X,
+        W0,
+        H0,
+        config,
+        h_update=minibatch_H_update,
+        w_update=minibatch_W_update,
+        recorder=record_history,
+    )
+
+
+def run_minibatch8_fixed_unbatched_eigh(
+    X: np.ndarray,
+    W0: np.ndarray,
+    H0: np.ndarray,
+    config: ComparisonConfig,
+) -> dict[str, Any]:
+    """Run the immediately previous stable implementation for regression checks."""
+    return _run_minibatch8_fixed(
+        X,
+        W0,
+        H0,
+        config,
+        h_update=minibatch_H_update_unbatched_eigh,
+        w_update=minibatch_W_update_unbatched_eigh,
+        recorder=record_history,
+    )
 
 
 def load_reference() -> tuple[Any, Any, str]:

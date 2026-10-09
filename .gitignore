@@ -31,6 +31,10 @@ Thumbs.db
 CURSOR_PROMPT.md
 experiments/ablation_simplex_nmf_minibatch8.py
 experiments/benchmark_simplex_nmf_optimization.py
+experiments/hsi_final_performance_audit.py
+experiments/hsi_optimization_audit.py
+experiments/hsi_single_row_optimization_audit.py
+from_chatgpt/
 tests/test_simplex_nmf_minibatch8_ablation.py
 tests/test_simplex_nmf_optimized.py
 data/*.mat
